@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 function wsUrl() {
-  const configured = import.meta.env.VITE_WS_URL || "/ws";
+  const configured =
+  import.meta.env.VITE_WS_URL ||
+  "wss://merry-gentleness-production-bc71.up.railway.app";
   if (configured.startsWith("ws://") || configured.startsWith("wss://")) return configured;
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${window.location.host}${configured}`;
