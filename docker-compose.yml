@@ -1,0 +1,133 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nearby}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nearby}
+      POSTGRES_DB: ${POSTGRES_DB:-nearby_friends}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nearby} -d ${POSTGRES_DB:-nearby_friends}"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api-server:
+    build:
+      context: .
+      dockerfile: api-server/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-nearby}:${POSTGRES_PASSWORD:-nearby}@postgres:5432/${POSTGRES_DB:-nearby_friends}
+      REDIS_URL: redis://redis:6379/0
+      SERVICE_NAME: api-server
+      LOCATION_TTL_SECONDS: ${LOCATION_TTL_SECONDS:-600}
+      MAX_FRIENDS: ${MAX_FRIENDS:-50}
+      DEFAULT_RADIUS_MILES: ${DEFAULT_RADIUS_MILES:-5.0}
+      NEARBY_PAGE_SIZE: ${NEARBY_PAGE_SIZE:-20}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+      DEMO_MODE: ${DEMO_MODE:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  websocket-server:
+    build:
+      context: .
+      dockerfile: websocket-server/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-nearby}:${POSTGRES_PASSWORD:-nearby}@postgres:5432/${POSTGRES_DB:-nearby_friends}
+      REDIS_URL: redis://redis:6379/0
+      SERVICE_NAME: websocket-server
+      LOCATION_TTL_SECONDS: ${LOCATION_TTL_SECONDS:-600}
+      MAX_FRIENDS: ${MAX_FRIENDS:-50}
+      DEFAULT_RADIUS_MILES: ${DEFAULT_RADIUS_MILES:-5.0}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    expose:
+      - "8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  frontend:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE: /api
+        VITE_WS_URL: /ws
+    expose:
+      - "80"
+    depends_on:
+      - api-server
+      - websocket-server
+
+  load-balancer:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      api-server:
+        condition: service_healthy
+      websocket-server:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+
+  seed:
+    build:
+      context: .
+      dockerfile: api-server/Dockerfile
+    command: ["python", "/shared/database/seed.py"]
+    environment:
+      DATABASE_URL_SYNC: postgresql://${POSTGRES_USER:-nearby}:${POSTGRES_PASSWORD:-nearby}@postgres:5432/${POSTGRES_DB:-nearby_friends}
+      REDIS_URL: redis://redis:6379/0
+      LOCATION_TTL_SECONDS: ${LOCATION_TTL_SECONDS:-600}
+      DEMO_MODE: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  postgres_data:
