@@ -1,8 +1,7 @@
 [build]
-builder = "NIXPACKS"
-buildCommand = "cd client && npm install && npm run build"
+builder = "DOCKERFILE"
+dockerfilePath = "client/Dockerfile"
 
 [deploy]
-startCommand = "cd client && npm run preview -- --host 0.0.0.0 --port $PORT"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
